@@ -15,6 +15,7 @@ For how the site behaves, why the code is shaped this way, and the full run hist
 - [How it works](#how-it-works)
 - [Project layout](#project-layout)
 - [Data and storage](#data-and-storage)
+- [Handing over the database](#handing-over-the-database)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Handling the data safely](#handling-the-data-safely)
@@ -38,7 +39,7 @@ pip install -e '.[test]'
 
 ## Quick start
 
-Run everything from `src/rrk`, because imports are top-level (`apex`, `rrs`, `parsing`, ...).
+On Windows, see [Stage 3](#stage-3-run-on-windows). Run everything from `src/rrk`, because imports are top-level (`apex`, `rrs`, `parsing`, ...).
 
 ```bash
 cd src/rrk
@@ -190,6 +191,108 @@ To pack plain texts and shrink the file, stop the GUI and all scrapes first. It 
 python3 -m database.compact
 ```
 
+## Handing over the database
+
+`rrk.db` is not in git. It moves through Google Drive, compressed, encrypted and split into 500 MB parts, so a dropped connection costs one part at most. Only `rrk.db` is needed: `rrk.explore.db` rebuilds from it.
+
+The database holds real names and national codes. Send the passphrase by a different channel than the Drive link, and share the folder only with the recipient.
+
+### Stage 1: pack and upload (sender, Linux)
+
+Stop the GUI and any scrape first. Run these in order from `src/rrk`. It assumes `rclone` is set up with a Google Drive remote named `gdrive`, and `zstd` and `gpg` are installed.
+
+```bash
+mkdir -p ~/rrk-upload && zstd -T0 -c rrk.db | gpg --symmetric --cipher-algo AES256 --output - | split -b 500M -d - ~/rrk-upload/rrk.db.zst.gpg.part-
+```
+
+```bash
+cd ~/rrk-upload && sha256sum rrk.db.zst.gpg.part-* > SHA256SUMS
+```
+
+If the upload drops, run the same command again. It skips the parts already there.
+
+```bash
+rclone copy ~/rrk-upload gdrive:rrk-handoff --drive-chunk-size 64M --transfers 2 --retries 20 --low-level-retries 50 -P
+```
+
+Confirm every part arrived. If anything differs, repeat the upload:
+
+```bash
+rclone check ~/rrk-upload gdrive:rrk-handoff
+```
+
+Then share the `rrk-handoff` folder with the recipient from the Drive website.
+
+### Stage 2: restore (recipient, Windows, no WSL)
+
+Keep about 35 GB free during the restore. Install the tools once, then open a new PowerShell window so they are on the `PATH`:
+
+```powershell
+winget install --id GnuPG.Gpg4win -e
+```
+
+```powershell
+winget install --id Meta.Zstandard -e
+```
+
+Download every file from the Drive folder into one local folder. Drive may pack a folder download into several zip files: extract them all into the same folder. Then run these in order in PowerShell, inside that folder.
+
+1. Check the parts. Every line must say `OK`; download any `FAILED` part again.
+
+```powershell
+Get-Content SHA256SUMS | ForEach-Object { $hash, $file = $_ -split '\s+', 2; $file = $file.TrimStart('*'); if ((Get-FileHash $file -Algorithm SHA256).Hash -ieq $hash) { "OK $file" } else { "FAILED $file" } }
+```
+
+2. Join the parts. Use `cmd`, not a PowerShell pipe: PowerShell pipes can corrupt binary data.
+
+```powershell
+cmd /c "copy /b rrk.db.zst.gpg.part-* rrk.db.zst.gpg"
+```
+
+3. Decrypt. A window asks for the passphrase. A wrong join or a damaged file fails here rather than giving a bad database.
+
+```powershell
+gpg --output rrk.db.zst --decrypt rrk.db.zst.gpg
+```
+
+4. Decompress:
+
+```powershell
+zstd -d rrk.db.zst -o rrk.db
+```
+
+5. Move `rrk.db` into `src\rrk`, then delete the parts, `rrk.db.zst.gpg` and `rrk.db.zst`.
+
+### Stage 3: run on Windows
+
+Install Python 3.11 or newer from python.org, then set up from the repo root. On Windows the command is `python`, not `python3`.
+
+```powershell
+python -m venv .venv
+```
+
+```powershell
+.venv\Scripts\python -m pip install -e ".[test]"
+```
+
+Start the GUI from `src\rrk`, then open <http://127.0.0.1:8765>:
+
+```powershell
+cd src\rrk
+```
+
+```powershell
+..\..\.venv\Scripts\python -m gui.server
+```
+
+The first start reads every text and builds the graph. Expect hours, and more than 15 GB of extra disk for `rrk.explore.db`. The pages work meanwhile.
+
+The project was developed and tested on Linux only, so Windows is untested. From reading the code:
+
+- **Explore** should work.
+- **The Runs page will not work.** It starts scrapes through `sh` and stops them with `os.killpg`, neither of which Windows has.
+- **Scrapes** should run from the command line instead, such as `..\..\.venv\Scripts\python main.py --type 2,3 --resume --missing-only`. Press Ctrl+C to stop one.
+
 ## Testing
 
 From the repo root:
@@ -234,5 +337,6 @@ Never commit or share these. All are in `.gitignore`.
 - Names and roles are read by heuristics, so check a notice before relying on a link. National codes and ids are the identity; names are labels.
 - A name spelled differently in the role sentence gets no role. A person named without a code in two companies becomes two nodes.
 - Rows on a capped day without a newspaper date can be unreachable.
+- Windows is untested, and the GUI's Runs page needs Linux or macOS.
 - The network map is not checked past a few hundred nodes.
 - `--new-only` and the split by newspaper type and city are built and tested, but not yet run live.
