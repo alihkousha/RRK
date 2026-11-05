@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.venv-ml/
+*.egg-info/
+
+# Local settings and secrets
+.env
+
+# Live-session captures and run output: hold cookies, session ids and checksums
+*.har
+*.log
+*.zip
+src/rrk/*.html
+src/rrk/debug/
+src/rrk/runs/
+src/rrk/response.json
+
+# Scraped data: real names and national codes
+src/rrk/ads.json
+src/rrk/ads.json.gz*
+src/rrk/rrk.db*
+src/rrk/*.explore.db*
+tests/labelled/
+
+# Generated
+src/rrk/graphify-out/
+ml/
