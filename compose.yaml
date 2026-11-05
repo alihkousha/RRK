@@ -1,0 +1,18 @@
+services:
+  rrk:
+    build: .
+    init: true
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    ports:
+      - "127.0.0.1:8765:8766"  # this machine only: the GUI has no login
+    volumes:
+      - rrk-data:/data  # a volume, not a Windows folder: SQLite's WAL is unreliable on those
+      - rrk-runs:/app/runs
+      - ./vpn:/vpn:ro
+
+volumes:
+  rrk-data:
+  rrk-runs:

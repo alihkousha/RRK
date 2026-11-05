@@ -1,0 +1,14 @@
+# Only the code goes in the image: never data, captures or VPN credentials
+*
+!docker/entrypoint.sh
+!src/rrk
+src/rrk/debug
+src/rrk/runs
+src/rrk/graphify-out
+src/rrk/*.har
+src/rrk/*.html
+src/rrk/*.log
+src/rrk/*.db*
+src/rrk/ads.json*
+src/rrk/response.json
+**/__pycache__

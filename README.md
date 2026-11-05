@@ -23,7 +23,7 @@ For how the site behaves, why the code is shaped this way, and the full run hist
 
 ## Setup
 
-You need Python 3.11 or newer (developed on 3.13) with SQLite FTS5, which standard builds include. The only runtime dependencies are `requests` and `urllib3`. The GUI has no build step and loads nothing from a CDN.
+You need Python 3.11 or newer (developed on 3.13) built with SQLite 3.43 or newer and FTS5: the GUI's full-text table needs both. Check with `python3 -c "import sqlite3; print(sqlite3.sqlite_version)"`. The only runtime dependencies are `requests` and `urllib3`. The GUI has no build step and loads nothing from a CDN.
 
 ```bash
 python3 -m venv .venv
@@ -39,7 +39,7 @@ pip install -e '.[test]'
 
 ## Quick start
 
-On Windows, see [Stage 3](#stage-3-run-on-windows). Run everything from `src/rrk`, because imports are top-level (`apex`, `rrs`, `parsing`, ...).
+On Windows, use Docker: see [Stage 3](#stage-3-run-in-docker-recipient-windows). Run everything from `src/rrk`, because imports are top-level (`apex`, `rrs`, `parsing`, ...).
 
 ```bash
 cd src/rrk
@@ -156,6 +156,7 @@ After scraping, `parsing/entities.py` reads who each text names, by national cod
 ```text
 rrk-scraper/
 ├── pyproject.toml
+├── Dockerfile, compose.yaml, docker/   the container: GUI, scraper and OpenVPN
 ├── tests/                 pytest suite; labelled/ is git-ignored
 └── src/rrk/
     ├── main.py            command-line entry point
@@ -263,35 +264,64 @@ zstd -d rrk.db.zst -o rrk.db
 
 5. Move `rrk.db` into `src\rrk`, then delete the parts, `rrk.db.zst.gpg` and `rrk.db.zst`.
 
-### Stage 3: run on Windows
+### Stage 3: run in Docker (recipient, Windows)
 
-Install Python 3.11 or newer from python.org, then set up from the repo root. On Windows the command is `python`, not `python3`.
+Docker runs the whole project as Linux, so the GUI, its Runs page and the VPN all work with no Python on Windows. Docker Desktop uses WSL2 underneath, and installs it if needed: nothing is run in WSL by hand.
+
+1. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it. Its disk grows by about 9 GB for the database, plus more than 15 GB for the explorer.
+
+2. Get the VPN files. Create a folder `vpn` in the repo root with these two files. Git and the image both leave this folder out.
+   - `vpn/IR1-split.ovpn`: the OpenVPN profile.
+   - `vpn/auth.txt`: two lines, the VPN username, then the password.
+
+3. From the repo root, build the image, create the container, and copy in the database restored in Stage 2:
 
 ```powershell
-python -m venv .venv
+docker compose build
 ```
 
 ```powershell
-.venv\Scripts\python -m pip install -e ".[test]"
-```
-
-Start the GUI from `src\rrk`, then open <http://127.0.0.1:8765>:
-
-```powershell
-cd src\rrk
+docker compose create
 ```
 
 ```powershell
-..\..\.venv\Scripts\python -m gui.server
+docker compose cp C:\path\to\rrk.db rrk:/data/rrk.db
 ```
 
-The first start reads every text and builds the graph. Expect hours, and more than 15 GB of extra disk for `rrk.explore.db`. The pages work meanwhile.
+4. Start it, then open <http://127.0.0.1:8765>:
 
-The project was developed and tested on Linux only, so Windows is untested. From reading the code:
+```powershell
+docker compose up -d
+```
 
-- **Explore** should work.
-- **The Runs page will not work.** It starts scrapes through `sh` and stops them with `os.killpg`, neither of which Windows has.
-- **Scrapes** should run from the command line instead, such as `..\..\.venv\Scripts\python main.py --type 2,3 --resume --missing-only`. Press Ctrl+C to stop one.
+5. Check the VPN. The log must show `Initialization Sequence Completed`, and the routes must list `tun0`:
+
+```powershell
+docker compose logs rrk
+```
+
+```powershell
+docker compose exec rrk ip route
+```
+
+The first start reads every text and builds the graph. Expect hours. The pages work meanwhile.
+
+Scrape from the GUI's Runs page, or from the command line:
+
+```powershell
+docker compose exec rrk python3 main.py --db /data/rrk.db --type 2,3,5,6 --resume --missing-only
+```
+
+Stop with `docker compose stop`. Do not use `docker compose down -v`: `-v` deletes the database volume.
+
+How it fits together:
+
+- The database and run logs live in the Docker volumes `rrk-data` and `rrk-runs`, because SQLite's WAL is unreliable on Windows folders.
+- The profile has `route-nopull`, so only its own routes use the tunnel. Traffic to those routes goes through the VPN inside the container, and Windows' own network is untouched.
+- Port 8765 is published on this machine only, because the GUI has no login.
+- Without the `vpn` files the container still starts, and Explore works. Scrapes then may not reach rrk.ir.
+
+`vpn/auth.txt` holds a password in plain text. Keep it off shared folders and never send it through Drive with the database.
 
 ## Testing
 
@@ -319,6 +349,8 @@ After changing the reading in `parsing/entities.py` or `parsing/events.py`, bump
 | `RemoteDisconnected` bursts | Too many requests at once. Lower sessions or workers |
 | `DetailPageError`, run stops | A firewall or APEX error page. Don't retry at once; the `<title>` is in the message |
 | `database or disk is full` | Free disk, then continue with "Finish stopped types" |
+| VPN stuck in Docker, `AUTH_FAILED` | Check `vpn/auth.txt`: two lines, no spaces |
+| VPN cipher or TLS errors in Docker | The profile uses old `AES-128-CBC` and `SHA1`. Read `docker compose logs rrk`, then adjust `docker/entrypoint.sh` |
 | A change to the graph or leads doesn't show | It needs a rebuild. With no new texts, run `DELETE FROM g_meta` in `rrk.explore.db` |
 | Search or map looks behind | They show the last finished graph build, at most about 10 minutes behind the texts |
 
@@ -329,6 +361,7 @@ Never commit or share these. All are in `.gitignore`.
 - `*.har`: hold live session cookies.
 - `*.html`, `*.log`, `*.zip`, `debug/`, `runs/`: hold session ids and checksums, and may hold copies of the above.
 - `rrk.db`, `rrk.explore.db`, `ads.json*`, `tests/labelled/`: hold real people's names and national codes.
+- `vpn/`: holds the VPN profile and password.
 
 `--verify-ssl` is off by default until a run shows that the site's certificate chain verifies.
 
@@ -337,6 +370,7 @@ Never commit or share these. All are in `.gitignore`.
 - Names and roles are read by heuristics, so check a notice before relying on a link. National codes and ids are the identity; names are labels.
 - A name spelled differently in the role sentence gets no role. A person named without a code in two companies becomes two nodes.
 - Rows on a capped day without a newspaper date can be unreachable.
-- Windows is untested, and the GUI's Runs page needs Linux or macOS.
+- Running directly on Windows is untested, and the GUI's Runs page needs `sh`, so use Docker there.
+- The VPN in Docker is tested only up to its connection attempt, not against the real server.
 - The network map is not checked past a few hundred nodes.
 - `--new-only` and the split by newspaper type and city are built and tested, but not yet run live.

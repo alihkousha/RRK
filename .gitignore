@@ -8,6 +8,7 @@ __pycache__/
 
 # Local settings and secrets
 .env
+vpn/
 
 # Live-session captures and run output: hold cookies, session ids and checksums
 *.har
